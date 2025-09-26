@@ -4,7 +4,7 @@ import io
 
 # --- ページ設定 ---
 st.set_page_config(
-    page_title="データ結合・分割ツール",
+    page_title="データ結合・分割ツール for Time Series",
     page_icon="🔗",
     layout="wide"
 )
@@ -15,84 +15,127 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8-sig')
 
 # --- メイン画面 ---
-st.title("🔗 CSVデータ 結合/分割ツール")
-st.write("2つのCSVファイルを安全に結合し、一括で前処理を行った後、再び元のファイルに分割できます。")
+st.title("🔗 CSVデータ 結合/分割ツール (時系列分析対応版)")
+st.write("2つのCSVファイルを安全に結合し、日付特徴量の生成などを行った後、再び元のファイルに分割できます。")
+
+# --- session_stateの初期化 ---
+if 'combined_df' not in st.session_state:
+    st.session_state.combined_df = None
 
 # --- タブで機能を分割 ---
-tab1, tab2 = st.tabs(["Step 1: データを結合する", "Step 2: データを分割する"])
+tab1, tab2 = st.tabs(["Step 1: データを結合・加工する", "Step 2: データを分割する"])
 
-# --- Step 1: 結合機能 ---
+# =====================================================================================
+# Step 1: 結合機能
+# =====================================================================================
 with tab1:
-    st.header("Step 1: 結合")
-    st.info("2つのCSVファイルをアップロードして、1つのファイルにまとめます。")
+    st.header("Step 1: 結合と特徴量生成")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        # ---【改善点1】UIの文言を汎用的に変更 ---
-        file1 = st.file_uploader("ファイル1 (例: train.csv) をアップロード", type=["csv"])
-    with col2:
-        file2 = st.file_uploader("ファイル2 (例: test.csv) をアップロード", type=["csv"])
+    with st.expander("1. ファイルをアップロードして結合", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            file1 = st.file_uploader("ファイル1 (例: train.csv) をアップロード", type=["csv"])
+        with col2:
+            file2 = st.file_uploader("ファイル2 (例: test.csv) をアップロード", type=["csv"])
 
-    if file1 is not None and file2 is not None:
-        df1 = pd.read_csv(file1)
-        df2 = pd.read_csv(file2)
-        
-        # ---【改善点2】任意で目的変数を指定させる機能を追加 ---
-        st.markdown("---")
-        target_column = st.selectbox(
-            '目的変数（片方のファイルにしか存在しない列）があれば選択してください。',
-            # df1のカラムリストの先頭にNoneを追加
-            options=[None] + list(df1.columns) 
-        )
-        
-        # ---【改善点3】列名のチェック機能を追加し、安全性を向上 ---
-        # 目的変数を除いた列セットを作成
-        if target_column:
-            df1_cols = set(df1.columns) - {target_column}
-            df2_cols = set(df2.columns)
-        else:
-            df1_cols = set(df1.columns)
-            df2_cols = set(df2.columns)
-        
-        # 列名が一致しない場合に警告を表示
-        if df1_cols != df2_cols:
-            st.warning("警告: 2つのファイルの列名が完全には一致していません。")
-            # 差分を具体的に表示すると、さらに親切
-            only_in_1 = df1_cols - df2_cols
-            only_in_2 = df2_cols - df1_cols
-            if only_in_1:
-                st.write(f"**ファイル1のみに存在する列:** `{list(only_in_1)}`")
-            if only_in_2:
-                st.write(f"**ファイル2のみに存在する列:** `{list(only_in_2)}`")
-            st.markdown("---")
-
-        # 「名札」となる列を追加 (ファイル名を名札にすると、より分かりやすい)
-        df1['source_dataset'] = file1.name
-        df2['source_dataset'] = file2.name
-        
-        # データを結合 (sort=False をつけて列の順序を維持)
-        combined_df = pd.concat([df1, df2], ignore_index=True, sort=False)
-        
-        st.success("データの結合が完了しました。")
-        
-        # ---【改善点4】目的変数がNaNになることについて説明を追加 ---
-        if target_column:
-            st.info(f"💡 ファイル2に由来する行では、目的変数 '{target_column}' の値が空欄 (NaN) になっています。これは意図した動作です。特徴量作成後、Step2で分割すれば元に戻ります。")
+        if file1 and file2:
+            df1 = pd.read_csv(file1)
+            df2 = pd.read_csv(file2)
             
-        st.dataframe(combined_df.head())
-        st.write(f"合計行数: {len(combined_df)}")
-        
+            target_column = st.selectbox(
+                '目的変数（ファイル1にしか存在しない列）があれば選択してください。',
+                options=[None] + list(df1.columns)
+            )
+            
+            # 列名のチェック機能
+            df1_cols = set(df1.columns) - {target_column} if target_column else set(df1.columns)
+            df2_cols = set(df2.columns)
+            if df1_cols != df2_cols:
+                st.warning("警告: 2つのファイルの列名（目的変数を除く）が完全には一致していません。")
+                st.write(f"**ファイル1のみの列:** `{list(df1_cols - df2_cols)}`")
+                st.write(f"**ファイル2のみの列:** `{list(df2_cols - df1_cols)}`")
+
+            # 処理実行ボタン
+            if st.button("Step 1.1: データを結合する", use_container_width=True):
+                # 「名札」となる列を追加
+                df1['source_dataset'] = file1.name
+                df2['source_dataset'] = file2.name
+                
+                # データを結合し、session_stateに保存
+                combined_df = pd.concat([df1, df2], ignore_index=True, sort=False)
+                st.session_state.combined_df = combined_df
+                
+                st.success("データの結合が完了しました。")
+                if target_column:
+                    st.info(f"💡 ファイル2由来の行では、目的変数 '{target_column}' が空欄 (NaN) になっています。")
+    
+    # --- 結合データが存在する場合のみ、後続処理のUIを表示 ---
+    if st.session_state.combined_df is not None:
+        st.markdown("---")
+        st.subheader("結合後のデータプレビュー")
+        st.dataframe(st.session_state.combined_df.head())
+        st.write(f"合計行数: {len(st.session_state.combined_df)}")
+
+        ### --- 改善点: 自動特徴量エンジニアリング機能 --- ###
+        st.markdown("---")
+        with st.expander("2. (オプション) 日付列から特徴量を自動生成"):
+            
+            datetime_column = st.selectbox(
+                "日付・時刻情報が含まれる列を選択してください。",
+                options=[None] + list(st.session_state.combined_df.columns)
+            )
+            
+            if datetime_column:
+                st.write("作成したい特徴量を選択してください：")
+                
+                # 作成する特徴量の選択肢
+                features_to_create = {
+                    "year": "年", "month": "月", "day": "日",
+                    "hour": "時", "minute": "分", "second": "秒",
+                    "dayofweek": "曜日 (0=月, 6=日)", "dayofyear": "年初からの日数",
+                    "weekofyear": "年内の週番号", "quarter": "四半期"
+                }
+                
+                selected_features = []
+                cols = st.columns(4)
+                for i, (feature, label) in enumerate(features_to_create.items()):
+                    if cols[i % 4].checkbox(label, value=True): # デフォルトでON
+                        selected_features.append(feature)
+
+                if st.button("Step 1.2: 日付特徴量を生成する", use_container_width=True):
+                    df = st.session_state.combined_df.copy()
+                    
+                    # 確実にdatetime型に変換
+                    df[datetime_column] = pd.to_datetime(df[datetime_column])
+                    
+                    # 選択された特徴量をループで作成
+                    for feature in selected_features:
+                        new_col_name = f"{datetime_column}_{feature}"
+                        df[new_col_name] = getattr(df[datetime_column].dt, feature)
+                        
+                    # isocalendar().weekは特別扱い
+                    if 'weekofyear' in selected_features:
+                         df[f"{datetime_column}_weekofyear"] = df[datetime_column].dt.isocalendar().week
+
+                    st.session_state.combined_df = df
+                    st.success("日付特徴量の生成が完了しました。")
+                    st.dataframe(st.session_state.combined_df.head())
+
+        st.markdown("---")
         st.download_button(
-           label="結合したCSVをダウンロード",
-           data=convert_df_to_csv(combined_df),
-           file_name='combined_data.csv',
+           label="加工済みCSVをダウンロード",
+           data=convert_df_to_csv(st.session_state.combined_df),
+           file_name='processed_combined_data.csv',
            mime='text/csv',
+           use_container_width=True
         )
 
-# --- Step 2: 分割機能 ---
+# =====================================================================================
+# Step 2: 分割機能
+# =====================================================================================
 with tab2:
     st.header("Step 2: 分割")
-    st.info("特徴量作成などの処理を行った、結合済みファイルをアップロードしてください。")
+    st.info("Step 1で加工・ダウンロードした、結合済みファイルをアップロードしてください。")
     
     processed_file = st.file_uploader("加工済みの結合データ をアップロード", type=["csv"])
     
@@ -100,46 +143,25 @@ with tab2:
         processed_df = pd.read_csv(processed_file)
         
         if 'source_dataset' not in processed_df.columns:
-            st.error("エラー: このファイルには分割用の情報（'source_dataset'列）が含まれていません。Step 1で結合したファイルを使用してください。")
+            st.error("エラー: このファイルには分割用の情報（'source_dataset'列）が含まれていません。")
         else:
-            # 分割の元になるファイル名（名札）を取得
             original_filenames = processed_df['source_dataset'].unique()
-            if len(original_filenames) != 2:
-                st.warning(f"注意: 結合元ファイルの数が2つではないようです。(検出されたファイル名: {original_filenames})")
-
-            st.success("データの分割が完了しました。")
             
-            # 分割後のデータプレビューとダウンロードボタン
-            col1, col2 = st.columns(2)
+            st.success("データの分割準備ができました。")
             
-            # 1つ目のファイルを復元
-            with col1:
-                filename1 = original_filenames[0]
-                df1_processed = processed_df[processed_df['source_dataset'] == filename1].copy()
-                df1_processed.drop(columns=['source_dataset'], inplace=True)
-                
-                st.subheader(f"加工後のデータ: {filename1}")
-                st.dataframe(df1_processed.head())
-                st.download_button(
-                   label=f"加工後の {filename1} をダウンロード",
-                   data=convert_df_to_csv(df1_processed),
-                   file_name=f"processed_{filename1}",
-                   mime='text/csv',
-                )
-            
-            # 2つ目のファイルを復元
-            if len(original_filenames) > 1:
-                with col2:
-                    filename2 = original_filenames[1]
-                    df2_processed = processed_df[processed_df['source_dataset'] == filename2].copy()
-                    df2_processed.drop(columns=['source_dataset'], inplace=True)
+            ### --- 改善点: DRY原則に沿ってコードをループ処理に --- ###
+            cols = st.columns(len(original_filenames))
+            for i, filename in enumerate(original_filenames):
+                with cols[i]:
+                    df_processed = processed_df[processed_df['source_dataset'] == filename].copy()
+                    df_processed.drop(columns=['source_dataset'], inplace=True)
                     
-                    st.subheader(f"加工後のデータ: {filename2}")
-                    st.dataframe(df2_processed.head())
+                    st.subheader(f"加工後のデータ: {filename}")
+                    st.dataframe(df_processed.head())
                     st.download_button(
-                       label=f"加工後の {filename2} をダウンロード",
-                       data=convert_df_to_csv(df2_processed),
-                       file_name=f"processed_{filename2}",
+                       label=f"加工後の {filename} をダウンロード",
+                       data=convert_df_to_csv(df_processed),
+                       file_name=f"processed_{filename}",
                        mime='text/csv',
+                       key=f"download_button_{i}" # ボタンごとにユニークなキーを設定
                     )
-
